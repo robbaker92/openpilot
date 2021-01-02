@@ -1,29 +1,20 @@
+#include <chrono>
+#include <thread>
+
 #include <stdio.h>
 #include <stdint.h>
-#include <signal.h>
 #include <unistd.h>
 #include <sys/resource.h>
 #include <sys/time.h>
 
-// Apple doesn't have timerfd
-#ifdef __APPLE__
-#include <thread>
-#else
-#include <sys/timerfd.h>
-#endif
-
 #include <cassert>
-#include <chrono>
-
 #include "messaging.hpp"
 #include "common/timing.h"
-#include "common/util.h"
 
-volatile sig_atomic_t do_exit = 0;
-static void set_do_exit(int sig) {
-  do_exit = 1;
-}
-
+// Apple doesn't have timerfd
+#ifndef __APPLE__
+#include <sys/timerfd.h>
+#endif
 
 #ifdef QCOM
 namespace {
@@ -37,9 +28,6 @@ namespace {
 
 int main() {
   setpriority(PRIO_PROCESS, 0, -13);
-
-  signal(SIGINT, (sighandler_t)set_do_exit);
-  signal(SIGTERM, (sighandler_t)set_do_exit);
 
   PubMaster pm({"clocks"});
 
@@ -57,11 +45,11 @@ int main() {
   assert(err == 0);
 
   uint64_t expirations = 0;
-  while (!do_exit && (err = read(timerfd, &expirations, sizeof(expirations)))) {
+  while ((err = read(timerfd, &expirations, sizeof(expirations)))) {
     if (err < 0) break;
 #else
   // Just run at 1Hz on apple
-  while (!do_exit){
+  while (true){
     std::this_thread::sleep_for(std::chrono::seconds(1));
 #endif
 

@@ -7,12 +7,8 @@
 #include "sidebar.hpp"
 
 static void ui_draw_sidebar_background(UIState *s) {
-#ifdef QCOM
-  const NVGcolor color = COLOR_BLACK_ALPHA(85);
-#else
-  const NVGcolor color = nvgRGBA(0x39, 0x39, 0x39, 0xff);
-#endif
-  ui_draw_rect(s->vg, 0, 0, sbr_w, s->fb_h, color);
+  int sbr_x = !s->scene.uilayout_sidebarcollapsed ? 0 : -(sbr_w) + bdr_s * 2;
+  ui_draw_rect(s->vg, sbr_x, 0, sbr_w, s->fb_h, COLOR_BLACK_ALPHA(85));
 }
 
 static void ui_draw_sidebar_settings_button(UIState *s) {
@@ -159,10 +155,10 @@ static void ui_draw_sidebar_connectivity(UIState *s) {
 }
 
 void ui_draw_sidebar(UIState *s) {
+  ui_draw_sidebar_background(s);
   if (s->scene.uilayout_sidebarcollapsed) {
     return;
   }
-  ui_draw_sidebar_background(s);
   ui_draw_sidebar_settings_button(s);
   ui_draw_sidebar_home_button(s);
   ui_draw_sidebar_network_strength(s);

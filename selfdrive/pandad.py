@@ -3,15 +3,11 @@
 import os
 import time
 
-from panda import BASEDIR as PANDA_BASEDIR, Panda, PandaDFU, build_st
-from common.basedir import BASEDIR
-from common.gpio import gpio_init, gpio_set
-from selfdrive.hardware import TICI
-from selfdrive.hardware.tici.pins import GPIO_HUB_RST_N, GPIO_STM_BOOT0, GPIO_STM_RST_N
+from common.hardware import TICI
+from common.gpio import GPIO_HUB_RST_N, GPIO_STM_BOOT0, GPIO_STM_RST_N, gpio_init, gpio_set
+from panda import BASEDIR, Panda, PandaDFU, build_st
 from selfdrive.swaglog import cloudlog
 
-def is_legacy_panda_reset():
-  return os.path.isfile("/persist/LEGACY_PANDA_RESET")
 
 def set_panda_power(power=True):
   if not TICI:
@@ -20,16 +16,16 @@ def set_panda_power(power=True):
   gpio_init(GPIO_STM_RST_N, True)
   gpio_init(GPIO_STM_BOOT0, True)
 
-  gpio_set(GPIO_STM_RST_N, False if is_legacy_panda_reset() else True)
+  gpio_set(GPIO_STM_RST_N, False)
   gpio_set(GPIO_HUB_RST_N, True)
 
   time.sleep(0.1)
 
-  gpio_set(GPIO_STM_RST_N, power if is_legacy_panda_reset() else (not power))
+  gpio_set(GPIO_STM_RST_N, power)
 
 
 def get_firmware_fn():
-  signed_fn = os.path.join(PANDA_BASEDIR, "board", "obj", "panda.bin.signed")
+  signed_fn = os.path.join(BASEDIR, "board", "obj", "panda.bin.signed")
   if os.path.exists(signed_fn):
     cloudlog.info("Using prebuilt signed firmware")
     return signed_fn
@@ -37,7 +33,7 @@ def get_firmware_fn():
     cloudlog.info("Building panda firmware")
     fn = "obj/panda.bin"
     build_st(fn, clean=False)
-    return os.path.join(PANDA_BASEDIR, "board", fn)
+    return os.path.join(BASEDIR, "board", fn)
 
 
 def get_expected_signature(fw_fn=None):
@@ -116,7 +112,7 @@ def main():
   set_panda_power()
   update_panda()
 
-  os.chdir(os.path.join(BASEDIR, "selfdrive/boardd"))
+  os.chdir("boardd")
   os.execvp("./boardd", ["./boardd"])
 
 

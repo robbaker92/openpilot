@@ -7,46 +7,36 @@
 #include <QTimer>
 
 #include "wifiManager.hpp"
-#include "widgets/input_field.hpp"
+#include "input_field.hpp"
 
 
 class WifiUI : public QWidget {
   Q_OBJECT
 
-public:
-  int page;
-  explicit WifiUI(QWidget *parent = 0, int page_length = 5);
-
 private:
-  WifiManager *wifi = nullptr;
-  const int networks_per_page;
+  WifiManager* wifi;
+  int page;
+  const int networks_per_page = 10;
 
-  QStackedWidget *swidget;
-  QVBoxLayout *vlayout;
-  QWidget *wifi_widget;
+  QStackedWidget* swidget;
+  QVBoxLayout* vlayout;
+  QWidget * wifi_widget;
 
-  InputField *input_field;
+  InputField *a;
   QEventLoop loop;
-  QTimer *timer;
+  QTimer * timer;
   QString text;
   QButtonGroup *connectButtons;
-  bool tetheringEnabled;
-  QLabel *ipv4;
 
-  void connectToNetwork(Network n);
   QString getStringFromUser();
+
+public:
+  explicit WifiUI(QWidget *parent = 0);
 
 private slots:
   void handleButton(QAbstractButton* m_button);
-  void toggleTethering(int enable);
   void refresh();
   void receiveText(QString text);
-  void wrongPassword(QString ssid);
-
   void prevPage();
   void nextPage();
-
-signals:
-  void openKeyboard();
-  void closeKeyboard();
 };

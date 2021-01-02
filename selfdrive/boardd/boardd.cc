@@ -39,15 +39,11 @@
 
 Panda * panda = NULL;
 std::atomic<bool> safety_setter_thread_running(false);
+volatile sig_atomic_t do_exit = 0;
 bool spoofing_started = false;
 bool fake_send = false;
 bool connected_once = false;
 bool ignition = false;
-
-volatile sig_atomic_t do_exit = 0;
-static void set_do_exit(int sig) {
-  do_exit = 1;
-}
 
 struct tm get_time(){
   time_t rawtime;
@@ -168,9 +164,9 @@ bool usb_connect() {
 
   // power on charging, only the first time. Panda can also change mode and it causes a brief disconneciton
 #ifndef __x86_64__
-  if (!connected_once) {
-    panda->set_usb_power_mode(cereal::HealthData::UsbPowerMode::CDP);
-  }
+  //if (!connected_once) {
+  panda->set_usb_power_mode(cereal::HealthData::UsbPowerMode::CDP);
+  //}
 #endif
 
   if (panda->has_rtc){
@@ -282,7 +278,7 @@ void can_health_thread() {
   Params params = Params();
 
   // Broadcast empty health message when panda is not yet connected
-  while (!do_exit && !panda) {
+  while (!panda){
     MessageBuilder msg;
     auto healthData  = msg.initEvent().initHealth();
 
@@ -478,7 +474,6 @@ void pigeon_thread() {
 
   // ubloxRaw = 8042
   PubMaster pm({"ubloxRaw"});
-  bool ignition_last = false;
 
 #ifdef QCOM2
   Pigeon * pigeon = Pigeon::connect("/dev/ttyHS0");
@@ -486,26 +481,18 @@ void pigeon_thread() {
   Pigeon * pigeon = Pigeon::connect(panda);
 #endif
 
+  pigeon->init();
+
   while (!do_exit && panda->connected) {
     std::string recv = pigeon->receive();
     if (recv.length() > 0) {
       if (recv[0] == (char)0x00){
-        if (ignition) {
-          LOGW("received invalid ublox message while onroad, resetting panda GPS");
-          pigeon->init();
-        }
+        LOGW("received invalid ublox message, resetting panda GPS");
+        pigeon->init();
       } else {
         pigeon_publish_raw(pm, recv);
       }
     }
-
-    // init pigeon on rising ignition edge
-    // since it was turned off in low power mode
-    if(ignition && !ignition_last) {
-      pigeon->init();
-    }
-
-    ignition_last = ignition;
 
     // 10ms - 100 Hz
     usleep(10*1000);
@@ -524,10 +511,6 @@ int main() {
   LOG("set priority returns %d", err);
   err = set_core_affinity(3);
   LOG("set affinity returns %d", err);
-
-  // setup signal handlers
-  signal(SIGINT, (sighandler_t)set_do_exit);
-  signal(SIGTERM, (sighandler_t)set_do_exit);
 
   // check the environment
   if (getenv("STARTED")) {

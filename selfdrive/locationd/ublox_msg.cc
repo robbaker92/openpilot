@@ -1,11 +1,20 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <signal.h>
 #include <unistd.h>
+#include <sched.h>
+#include <sys/time.h>
+#include <sys/cdefs.h>
+#include <sys/types.h>
+#include <assert.h>
 #include <math.h>
 #include <ctime>
 #include <chrono>
+#include <algorithm>
 
+#include "common/params.h"
 #include "common/swaglog.h"
+#include "common/timing.h"
 
 #include "ublox_msg.h"
 
@@ -164,7 +173,8 @@ inline bool UbloxMsgParser::valid_cheksum() {
 
 inline bool UbloxMsgParser::valid() {
   return bytes_in_parse_buf >= UBLOX_HEADER_SIZE + UBLOX_CHECKSUM_SIZE &&
-         needed_bytes() == 0 && valid_cheksum();
+    needed_bytes() == 0 &&
+    valid_cheksum();
 }
 
 inline bool UbloxMsgParser::valid_so_far() {
@@ -176,9 +186,8 @@ inline bool UbloxMsgParser::valid_so_far() {
     //LOGD("PREAMBLE2 invalid, %02X.", msg_parse_buf[1]);
     return false;
   }
-  if(needed_bytes() == 0 && !valid()) {
+  if(needed_bytes() == 0 && !valid())
     return false;
-  }
   return true;
 }
 
@@ -204,7 +213,8 @@ kj::Array<capnp::word> UbloxMsgParser::gen_solution() {
   std::time_t utc_tt = timegm(&timeinfo);
   gpsLoc.setTimestamp(utc_tt * 1e+03 + msg->nano * 1e-06);
   float f[] = { msg->velN * 1e-03f, msg->velE * 1e-03f, msg->velD * 1e-03f };
-  gpsLoc.setVNED(f);
+  kj::ArrayPtr<const float> ap(&f[0], sizeof(f) / sizeof(f[0]));
+  gpsLoc.setVNED(ap);
   gpsLoc.setVerticalAccuracy(msg->vAcc * 1e-03);
   gpsLoc.setSpeedAccuracy(msg->sAcc * 1e-03);
   gpsLoc.setBearingAccuracy(msg->headAcc * 1e-05);
@@ -212,7 +222,7 @@ kj::Array<capnp::word> UbloxMsgParser::gen_solution() {
 }
 
 inline bool bit_to_bool(uint8_t val, int shifts) {
-  return (bool)(val & (1 << shifts));
+  return (val & (1 << shifts)) ? true : false;
 }
 
 kj::Array<capnp::word> UbloxMsgParser::gen_raw() {
@@ -273,15 +283,13 @@ kj::Array<capnp::word> UbloxMsgParser::gen_nav_data() {
     for(int i = 0; i < msg->numWords;i++)
       words.push_back(measurements[i].dwrd);
 
-    subframes_map &map = nav_frame_buffer[msg->gnssId][msg->svid];
-    if (subframeId == 1) {
-      map = subframes_map();
-      map[subframeId] = words;
-    } else if (map.find(subframeId-1) != map.end()) {
-      map[subframeId] = words;
-    }
-    if(map.size() == 5) {
-      EphemerisData ephem_data(msg->svid, map);
+    if(subframeId == 1) {
+      nav_frame_buffer[msg->gnssId][msg->svid] = subframes_map();
+      nav_frame_buffer[msg->gnssId][msg->svid][subframeId] = words;
+    } else if(nav_frame_buffer[msg->gnssId][msg->svid].find(subframeId-1) != nav_frame_buffer[msg->gnssId][msg->svid].end())
+      nav_frame_buffer[msg->gnssId][msg->svid][subframeId] = words;
+    if(nav_frame_buffer[msg->gnssId][msg->svid].size() == 5) {
+      EphemerisData ephem_data(msg->svid, nav_frame_buffer[msg->gnssId][msg->svid]);
       MessageBuilder msg_builder;
       auto eph = msg_builder.initEvent().initUbloxGnss().initEphemeris();
       eph.setSvId(ephem_data.svId);
@@ -310,8 +318,10 @@ kj::Array<capnp::word> UbloxMsgParser::gen_nav_data() {
       eph.setTgd(ephem_data.Tgd);
       eph.setIonoCoeffsValid(ephem_data.ionoCoeffsValid);
       if(ephem_data.ionoCoeffsValid) {
-        eph.setIonoAlpha(ephem_data.ionoAlpha);
-        eph.setIonoBeta(ephem_data.ionoBeta);
+        kj::ArrayPtr<const double> apa(&ephem_data.ionoAlpha[0], sizeof(ephem_data.ionoAlpha) / sizeof(ephem_data.ionoAlpha[0]));
+        eph.setIonoAlpha(apa);
+        kj::ArrayPtr<const double> apb(&ephem_data.ionoBeta[0], sizeof(ephem_data.ionoBeta) / sizeof(ephem_data.ionoBeta[0]));
+        eph.setIonoBeta(apb);
       } else {
         eph.setIonoAlpha(kj::ArrayPtr<const double>());
         eph.setIonoBeta(kj::ArrayPtr<const double>());

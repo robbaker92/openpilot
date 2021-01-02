@@ -11,15 +11,20 @@ from smbus2 import SMBus
 import cereal.messaging as messaging
 from cereal import log
 from common.filter_simple import FirstOrderFilter
+from common.hardware import EON, HARDWARE, TICI
 from common.numpy_fast import clip, interp
 from common.params import Params
 from common.realtime import DT_TRML, sec_since_boot
 from selfdrive.controls.lib.alertmanager import set_offroad_alert
-from selfdrive.hardware import EON, HARDWARE, TICI
 from selfdrive.loggerd.config import get_available_percent
 from selfdrive.pandad import get_expected_signature
 from selfdrive.swaglog import cloudlog
-from selfdrive.thermald.power_monitoring import PowerMonitoring
+from selfdrive.thermald.power_monitoring import (PowerMonitoring,
+                                                 get_battery_capacity,
+                                                 get_battery_current,
+                                                 get_battery_status,
+                                                 get_battery_voltage,
+                                                 get_usb_present)
 from selfdrive.version import get_git_branch, terms_version, training_version
 
 ThermalConfig = namedtuple('ThermalConfig', ['cpu', 'gpu', 'mem', 'bat', 'ambient'])
@@ -56,7 +61,7 @@ def read_tz(x):
     return 0
 
   try:
-    with open(f"/sys/devices/virtual/thermal/thermal_zone{x}/temp") as f:
+    with open("/sys/devices/virtual/thermal/thermal_zone%d/temp" % x) as f:
       return int(f.read())
   except FileNotFoundError:
     return 0
@@ -123,6 +128,10 @@ _TEMP_THRS_L = [42.5, 57.5, 72.5, 10000]
 _FAN_SPEEDS = [0, 16384, 32768, 65535]
 # max fan speed only allowed if battery is hot
 _BAT_TEMP_THRESHOLD = 45.
+# config for Noctua fan
+if os.getenv("NOCTUA") == 1:
+  _FAN_SPEEDS = [0, 65535, 65535, 65535]
+  _BAT_TEMP_THRESHOLD = 25.
 
 
 def handle_fan_eon(max_cpu_temp, bat_temp, fan_speed, ignition):
@@ -162,10 +171,10 @@ def set_offroad_alert_if_changed(offroad_alert: str, show_alert: bool, extra_tex
 
 
 def thermald_thread():
-
-  pm = messaging.PubMaster(['thermal'])
-
   health_timeout = int(1000 * 2.5 * DT_TRML)  # 2.5x the expected health frequency
+
+  # now loop
+  thermal_sock = messaging.pub_sock('thermal')
   health_sock = messaging.sub_sock('health', timeout=health_timeout)
   location_sock = messaging.sub_sock('gpsLocation')
 
@@ -195,13 +204,15 @@ def thermald_thread():
   is_uno = False
 
   params = Params()
-  power_monitor = PowerMonitoring()
+  pm = PowerMonitoring()
   no_panda_cnt = 0
 
   thermal_config = get_thermal_config()
 
   while 1:
     health = messaging.recv_sock(health_sock, wait=True)
+    location = messaging.recv_sock(location_sock)
+    location = location.gpsLocation if location else None
     msg = read_thermal(thermal_config)
 
     if health is not None:
@@ -250,11 +261,11 @@ def thermald_thread():
     msg.thermal.cpuPerc = int(round(psutil.cpu_percent()))
     msg.thermal.networkType = network_type
     msg.thermal.networkStrength = network_strength
-    msg.thermal.batteryPercent = HARDWARE.get_battery_capacity()
-    msg.thermal.batteryStatus = HARDWARE.get_battery_status()
-    msg.thermal.batteryCurrent = HARDWARE.get_battery_current()
-    msg.thermal.batteryVoltage = HARDWARE.get_battery_voltage()
-    msg.thermal.usbOnline = HARDWARE.get_usb_present()
+    msg.thermal.batteryPercent = get_battery_capacity()
+    msg.thermal.batteryStatus = get_battery_status()
+    msg.thermal.batteryCurrent = get_battery_current()
+    msg.thermal.batteryVoltage = get_battery_voltage()
+    msg.thermal.usbOnline = get_usb_present()
 
     # Fake battery levels on uno for frame
     if (not EON) or is_uno:
@@ -276,7 +287,6 @@ def thermald_thread():
     # If device is offroad we want to cool down before going onroad
     # since going onroad increases load and can make temps go over 107
     # We only do this if there is a relay that prevents the car from faulting
-    thermal_status = ThermalStatus.green # default to good condition
     is_offroad_for_5_min = (started_ts is None) and ((not started_seen) or (off_ts is None) or (sec_since_boot() - off_ts > 60 * 5))
     if max_cpu_temp > 107. or bat_temp >= 63. or (is_offroad_for_5_min and max_cpu_temp > 70.0):
       # onroad not allowed
@@ -293,6 +303,9 @@ def thermald_thread():
     elif max_cpu_temp > 75.0:
       # hysteresis between uploader not allowed and all good
       thermal_status = clip(thermal_status, ThermalStatus.green, ThermalStatus.yellow)
+    else:
+      # all good
+      thermal_status = ThermalStatus.green
 
     # **** starting logic ****
 
@@ -337,7 +350,6 @@ def thermald_thread():
       set_offroad_alert_if_changed("Offroad_ConnectivityNeeded", False)
       set_offroad_alert_if_changed("Offroad_ConnectivityNeededPrompt", False)
 
-    startup_conditions["up_to_date"] = params.get("Offroad_ConnectivityNeeded") is None or params.get("DisableUpdates") == b"1"
     startup_conditions["not_uninstalling"] = not params.get("DoUninstall") == b"1"
     startup_conditions["accepted_terms"] = params.get("HasAcceptedTerms") == terms_version
 
@@ -357,11 +369,9 @@ def thermald_thread():
     set_offroad_alert_if_changed("Offroad_TemperatureTooHigh", (not startup_conditions["device_temp_good"]))
     should_start = all(startup_conditions.values())
 
-    startup_conditions["hardware_supported"] = health is not None and health.health.hwType not in [log.HealthData.HwType.whitePanda,
-                                                                                                   log.HealthData.HwType.greyPanda]
+    startup_conditions["hardware_supported"] = health is not None
     set_offroad_alert_if_changed("Offroad_HardwareUnsupported", health is not None and not startup_conditions["hardware_supported"])
 
-    # Handle offroad/onroad transition
     if should_start:
       if not should_start_prev:
         params.delete("IsOffroad")
@@ -373,7 +383,6 @@ def thermald_thread():
     else:
       if startup_conditions["ignition"] and (startup_conditions != startup_conditions_prev):
         cloudlog.event("Startup blocked", startup_conditions=startup_conditions)
-
       if should_start_prev or (count == 0):
         params.put("IsOffroad", "1")
 
@@ -382,15 +391,15 @@ def thermald_thread():
         off_ts = sec_since_boot()
 
     # Offroad power monitoring
-    power_monitor.calculate(health)
-    msg.thermal.offroadPowerUsage = power_monitor.get_power_used()
-    msg.thermal.carBatteryCapacity = max(0, power_monitor.get_car_battery_capacity())
+    pm.calculate(health)
+    msg.thermal.offroadPowerUsage = pm.get_power_used()
+    msg.thermal.carBatteryCapacity = max(0, pm.get_car_battery_capacity())
 
     # Check if we need to disable charging (handled by boardd)
-    msg.thermal.chargingDisabled = power_monitor.should_disable_charging(health, off_ts)
+    msg.thermal.chargingDisabled = pm.should_disable_charging(health, off_ts)
 
     # Check if we need to shut down
-    if power_monitor.should_shutdown(health, off_ts, started_seen, LEON):
+    if pm.should_shutdown(health, off_ts, started_seen, LEON):
       cloudlog.info(f"shutting device down, offroad since {off_ts}")
       # TODO: add function for blocking cloudlog instead of sleep
       time.sleep(10)
@@ -401,7 +410,7 @@ def thermald_thread():
     msg.thermal.startedTs = int(1e9*(started_ts or 0))
 
     msg.thermal.thermalStatus = thermal_status
-    pm.send("thermal", msg)
+    thermal_sock.send(msg.to_bytes())
 
     set_offroad_alert_if_changed("Offroad_ChargeDisabled", (not usb_power))
 
@@ -410,11 +419,10 @@ def thermald_thread():
 
     # report to server once per minute
     if (count % int(60. / DT_TRML)) == 0:
-      location = messaging.recv_sock(location_sock)
       cloudlog.event("STATUS_PACKET",
                      count=count,
                      health=(health.to_dict() if health else None),
-                     location=(location.gpsLocation.to_dict() if location else None),
+                     location=(location.to_dict() if location else None),
                      thermal=msg.to_dict())
 
     count += 1

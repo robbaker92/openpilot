@@ -56,7 +56,7 @@ export PYTHONPATH="/data/openpilot:/data/openpilot/pyextra"
 SCONS_CACHE=1 scons -j3
 
 # Run tests
-python selfdrive/test/test_manager.py
+nosetests -s selfdrive/test/test_openpilot.py
 selfdrive/car/tests/test_car_interfaces.py
 
 # Cleanup
