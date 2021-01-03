@@ -71,6 +71,11 @@ class CarController():
                                    left_lane, right_lane,
                                    left_lane_warning, right_lane_warning))
 
+    if CS.mdps_bus or CS.scc_bus == 1: # send lkas11 bus 1 if mdps or scc is on bus 1
+    can_sends.append(create_lkas11(self.packer, frame, self.car_fingerprint, apply_steer, lkas_active,
+                                   CS.lkas11, sys_warning, sys_state, enabled, left_lane, right_lane,
+                                   left_lane_warning, right_lane_warning, 1))
+    
     if pcm_cancel_cmd:
       can_sends.append(create_clu11(self.packer, frame, CS.clu11, Buttons.CANCEL))
     elif CS.out.cruiseState.standstill:
