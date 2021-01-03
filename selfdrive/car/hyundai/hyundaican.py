@@ -42,7 +42,7 @@ def create_lkas11(packer, frame, car_fingerprint, apply_steer, steer_req,
   elif car_fingerprint == CAR.KIA_OPTIMA:
     values["CF_Lkas_LdwsActivemode"] = 0
 
-  dat = packer.make_can_msg("LKAS11", 0, values)[2]
+  dat = packer.make_can_msg("LKAS11", bus, values)[2]
 
   if car_fingerprint in CHECKSUM["crc8"]:
     # CRC Checksum as seen on 2019 Hyundai Santa Fe
